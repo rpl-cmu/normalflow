@@ -6,6 +6,16 @@ from scipy.spatial.transform import Rotation as R
 from normalflow.utils import height2pointcloud, get_J
 
 
+class InsufficientOverlapError(Exception):
+    """Exception raised when there is insufficient shared contact region between frames."""
+
+    def __init__(
+        self,
+        message="Insufficient shared contact regions between frames for reliable NormalFlow registration.",
+    ):
+        super().__init__(message)
+
+
 def normalflow(
     N_ref,
     C_ref,
@@ -33,6 +43,7 @@ def normalflow(
     :param n_samples: int; the number of samples to use for the optimization. If None, use all the pixels in contact.
     :param verbose: bool; whether to print the information of the algorithm
     :return: np.ndarray (4, 4); the homogeneous transformation matrix from frame t to frame t+1.
+    :raises: InsufficientOverlapError; if there is insufficient shared contact region between frames.
     """
     tar_T_ref_init = tar_T_ref_init.astype(np.float32)
     # Apply mask to pointcloud and normals on the reference
@@ -72,19 +83,21 @@ def normalflow(
             )[:, 0]
             > 0.5
         )
-        xx_region = np.logical_and(remapped_xx_ref >= 0, remapped_xx_ref < C_ref.shape[1])
-        yy_region = np.logical_and(remapped_yy_ref >= 0, remapped_yy_ref < C_ref.shape[0])
+        xx_region = np.logical_and(
+            remapped_xx_ref >= 0, remapped_xx_ref < C_ref.shape[1]
+        )
+        yy_region = np.logical_and(
+            remapped_yy_ref >= 0, remapped_yy_ref < C_ref.shape[0]
+        )
         xy_region = np.logical_and(xx_region, yy_region)
         shared_C = np.logical_and(remapped_C_tar, xy_region)
         if np.sum(shared_C) < 10:
-            if verbose:
-                print("lose track")
-            return tar_T_ref_init
+            raise InsufficientOverlapError()
 
         # Least square estimation
-        remapped_N_tar = cv2.remap(N_tar, remapped_xx_ref, remapped_yy_ref, cv2.INTER_LINEAR)[
-            :, 0, :
-        ]
+        remapped_N_tar = cv2.remap(
+            N_tar, remapped_xx_ref, remapped_yy_ref, cv2.INTER_LINEAR
+        )[:, 0, :]
         b = (remapped_N_tar @ np.linalg.inv(tar_T_ref[:3, :3]).T - masked_N_ref)[
             shared_C
         ].reshape(-1)
@@ -128,9 +141,9 @@ def normalflow(
     yy_region = np.logical_and(remapped_yy_ref >= 0, remapped_yy_ref < C_ref.shape[0])
     xy_region = np.logical_and(xx_region, yy_region)
     remapped_C_tar = np.logical_and(remapped_C_tar, xy_region)
-    remapped_H_tar = cv2.remap(H_tar, remapped_xx_ref, remapped_yy_ref, cv2.INTER_LINEAR)[
-        :, 0
-    ]
+    remapped_H_tar = cv2.remap(
+        H_tar, remapped_xx_ref, remapped_yy_ref, cv2.INTER_LINEAR
+    )[:, 0]
     tar_T_ref[2, 3] = np.mean(
         remapped_H_tar[remapped_C_tar] * ppmm / 1000.0
         - remapped_pointcloud_ref[:, 2][remapped_C_tar],

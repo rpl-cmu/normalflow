@@ -7,7 +7,7 @@ import yaml
 
 from gs_sdk.gs_device import Camera
 from gs_sdk.gs_reconstruct import Reconstructor
-from normalflow.registration import normalflow
+from normalflow.registration import normalflow, InsufficientOverlapError
 from normalflow.utils import erode_contact_mask, gxy2normal, transform2pose
 from normalflow.viz_utils import annotate_coordinate_system
 
@@ -146,6 +146,7 @@ def realtime_object_tracking():
             C_prev = None
             H_prev = None
             N_prev = None
+            prev_T_ref = np.eye(4)
             start_T_ref = np.eye(4)
             is_tracking = True
             while is_tracking:
@@ -159,7 +160,7 @@ def realtime_object_tracking():
                 N_curr = gxy2normal(G_curr)
 
                 # Use NormalFlow to estimate the transformation
-                if N_prev is not None:
+                try:
                     curr_T_ref = normalflow(
                         N_ref,
                         C_ref,
@@ -170,18 +171,9 @@ def realtime_object_tracking():
                         prev_T_ref,
                         ppmm,
                     )
-                else:
-                    curr_T_ref = normalflow(
-                        N_ref,
-                        C_ref,
-                        H_ref,
-                        N_curr,
-                        C_curr,
-                        H_curr,
-                        np.eye(4),
-                        ppmm,
-                    )
-
+                    is_reset = False
+                except InsufficientOverlapError:
+                    is_reset = True
                 # Reset reference frame (set a new keyframe) if needed.
                 if N_prev is not None:
                     curr_T_prev = normalflow(
@@ -194,11 +186,13 @@ def realtime_object_tracking():
                         np.eye(4),
                         ppmm,
                     )
-                    T_error = np.linalg.inv(curr_T_ref) @ curr_T_prev @ prev_T_ref
-                    pose_error = transform2pose(T_error)
-                    rot_error = np.linalg.norm(pose_error[3:])
-                    trans_error = np.linalg.norm(pose_error[:3])
-                    if rot_error > 3.0 or trans_error > 1.0:
+                    if not is_reset:
+                        T_error = np.linalg.inv(curr_T_ref) @ curr_T_prev @ prev_T_ref
+                        pose_error = transform2pose(T_error)
+                        rot_error = np.linalg.norm(pose_error[3:])
+                        trans_error = np.linalg.norm(pose_error[:3])
+                        is_reset = rot_error > 3.0 or trans_error > 1.0
+                    if is_reset:
                         G_ref = G_prev.copy()
                         C_ref = C_prev.copy()
                         H_ref = H_prev.copy()
