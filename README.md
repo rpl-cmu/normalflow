@@ -61,6 +61,7 @@ realtime_object_tracking [-d {cpu|cuda}]
 
 After starting, wait a few seconds for a window to appear. Tracking will begin once an object contacts the sensor. Press any key to exit.
 
+* Note: By default, the demo uses the OpenCV streamer, which often reduces GelSight Mini’s frame rate to ~10 Hz (vs. 25 Hz). For tracking low-textured objects like a ping pong ball, 25 Hz may be needed. Using the FFMPEG streamer by adding the `-s ffmpeg` flag to the command can restore the 25 Hz frame rate. However, we observe that on some systems, the FFMPEG streamer can introduce severe frame delay and duplication.
 * Note: For other GelSight sensors, please use the [GelSight SDK](https://github.com/joehjhuang/gs_sdk) Calibration tool to calibrate. Supply the configuration file and calibrated model path as arguments to run the demo with other GelSight sensors.
 * Note: This demo also serves as an implementation of the long-horizon tracking algorithm presented in the [RA-L paper](https://ieeexplore.ieee.org/document/10766628).
 

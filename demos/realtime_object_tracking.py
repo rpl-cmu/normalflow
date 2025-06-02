@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import yaml
 
-from gs_sdk.gs_device import Camera
+from gs_sdk.gs_device import Camera, FastCamera
 from gs_sdk.gs_reconstruct import Reconstructor
 from normalflow.registration import normalflow, InsufficientOverlapError
 from normalflow.utils import erode_contact_mask, gxy2normal, transform2pose
@@ -23,6 +23,9 @@ Instruction:
     - Press whatever object to the sensor for tracking. You may switch objects in between.
     - Press any key to quit the streaming session.
 Important Note:
+    - If you are using the GelSight Mini, setting args.streamer to 'opencv' will result in a lower frame rate 
+      (~10 Hz instead of the expected 25 Hz). Setting args.streamer to 'ffmpeg' resolves this frame rate issue;
+      however, on some systems, it may introduce significant delays and duplicate frames.
     - If you are not using GelSight Mini, please calibrate your sensor using the gs_sdk package.
     - The whole calibration process only requires a metal ball with a known diameter and less than half hour.
     - Provide the trained calibration model and the sensor configuration file as arguments when running.
@@ -37,6 +40,8 @@ Arguments:
     --config_path: (Optional) The path of the configuration file for the GelSight sensor.
             The configuration file specifies the specifications of the sensor.
             The default is the configuration file for GelSight Mini.
+    --streamer: (Optional) The sensor streamer.
+            Can be either 'opencv' for 'gs_device.Camera' or 'ffmpeg' for 'gs_device.FastCamera'.
     --device: (Optional) The device to run the neural network model that predicts the normal map.
             Can be either 'cpu' or 'cuda'. The default is 'cpu'.
 
@@ -68,6 +73,14 @@ def realtime_object_tracking():
         default=config_path,
     )
     parser.add_argument(
+        "-s",
+        "--streamer",
+        type=str,
+        choices=["opencv", "ffmpeg"],
+        help="The sensor streamer. 'opencv' for 'gs_device.Camera' and 'ffmpeg' for 'gs_device.FastCamera'.",
+        default="opencv",
+    )
+    parser.add_argument(
         "-d",
         "--device",
         type=str,
@@ -84,9 +97,15 @@ def realtime_object_tracking():
         ppmm = config["ppmm"]
         imgh = config["imgh"]
         imgw = config["imgw"]
+        raw_imgh = config["raw_imgh"]
+        raw_imgw = config["raw_imgw"]
+        framerate = config["framerate"]
 
     # Connect to the sensor and the reconstructor
-    device = Camera(device_name, imgh, imgw)
+    if args.streamer == "opencv":
+        device = Camera(device_name, imgh, imgw)
+    elif args.streamer == "ffmpeg":
+        device = FastCamera(device_name, imgh, imgw, raw_imgh, raw_imgw, framerate)
     device.connect()
     recon = Reconstructor(args.calib_model_path, device="cpu")
 
