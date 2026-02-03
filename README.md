@@ -84,6 +84,9 @@ The `normalflow` function in `normalflow/registration.py` implements frame-to-fr
 ## Reproduce Paper Results
 To reproduce the main results from our [paper](https://ieeexplore.ieee.org/document/10766628), which compares NormalFlow with baseline algorithms, please visit the [NormalFlow Experiment](https://github.com/rpl-cmu/normalflow_experiment) repository.
 
+## Updates
+* **2025-02-03**: Implemented the NormalFlow failure detection method using Curvature Cosine Similarity (CCS) and Shared Contact Ratio (SCR) metrics. Additionally, integrated the subsampling strategy that prioritizes high-curvature regions instead of random subsampling. Both improvements are based on the [GelSLAM paper](https://joehjhuang.github.io/gelslam/).
+
 ## Cite NormalFlow
 If you find this package useful, please consider citing our paper:
 ```

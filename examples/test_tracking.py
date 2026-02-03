@@ -1,5 +1,6 @@
 import argparse
 import os
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
 import cv2
 import numpy as np
@@ -7,7 +8,7 @@ import yaml
 
 from gs_sdk.gs_reconstruct import Reconstructor
 from normalflow.registration import normalflow
-from normalflow.utils import erode_contact_mask, gxy2normal
+from normalflow.utils import Frame
 from normalflow.viz_utils import annotate_coordinate_system
 
 """
@@ -69,8 +70,7 @@ def test_tracking():
 
     # Get the reference frame surface informations
     G_ref, H_ref, C_ref = recon.get_surface_info(tactile_images[0], ppmm)
-    C_ref = erode_contact_mask(C_ref)
-    N_ref = gxy2normal(G_ref)
+    frame_ref = Frame(G_ref, H_ref, C_ref)
     # For display purpose, get the largest contour and its center
     contours_ref, _ = cv2.findContours(
         (C_ref * 255).astype(np.uint8),
@@ -82,20 +82,25 @@ def test_tracking():
 
     # Track the target frames with regards to the reference frame
     tracked_tactile_images = []
-    curr_T_ref_init = np.eye(4)
+    curr_T_ref_init = np.eye(4, dtype=np.float32)
     for tactile_image in tactile_images[1:]:
         G_curr, H_curr, C_curr = recon.get_surface_info(tactile_image, ppmm)
-        C_curr = erode_contact_mask(C_curr)
-        N_curr = gxy2normal(G_curr)
+        frame_curr = Frame(G_curr, H_curr, C_curr)
+        # We disable the thresholds here for short-horizon tracking
+        # For long horizon tracking and proper handling LoseTrackError, check demos/realtime_object_tracking.py
         curr_T_ref = normalflow(
-            N_ref,
-            C_ref,
-            H_ref,
-            N_curr,
-            C_curr,
-            H_curr,
+            frame_ref.N,
+            frame_ref.C,
+            frame_ref.H,
+            frame_ref.L,
+            frame_curr.N,
+            frame_curr.C,
+            frame_curr.H,
+            frame_curr.L,
             curr_T_ref_init,
             ppmm,
+            scr_threshold=0.0,
+            ccs_threshold=0.0,
         )
         curr_T_ref_init = curr_T_ref
 

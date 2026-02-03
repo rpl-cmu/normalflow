@@ -1,5 +1,6 @@
 import argparse
 import os
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
 import cv2
 import numpy as np
@@ -7,13 +8,13 @@ import yaml
 
 from gs_sdk.gs_device import Camera, FastCamera
 from gs_sdk.gs_reconstruct import Reconstructor
-from normalflow.registration import normalflow, InsufficientOverlapError
-from normalflow.utils import erode_contact_mask, gxy2normal, transform2pose
+from normalflow.registration import normalflow, LoseTrackError
+from normalflow.utils import Frame
 from normalflow.viz_utils import annotate_coordinate_system
 
 """
 This script demonstrates real-time using normalflow to track objects in contact.
-The implementation is using the long-horizon tracking algorithm discussed in our paper.
+The implementation is using the long-horizon tracking algorithm discussed in our GelSLAM paper.
 
 Prerequisite:
     - Calibrate your GelSight sensor if you are not using the GelSight Mini sensor.
@@ -51,6 +52,11 @@ Press any key to quit the streaming session.
 
 calib_model_path = os.path.join(os.path.dirname(__file__), "models", "nnmodel.pth")
 config_path = os.path.join(os.path.dirname(__file__), "configs", "gsmini.yaml")
+
+
+def resize_show(image, frame_name="frame", scale=2.5):
+    image = cv2.resize(image, (0, 0), fx=scale, fy=scale)
+    cv2.imshow(frame_name, image)
 
 
 def realtime_object_tracking():
@@ -125,10 +131,9 @@ def realtime_object_tracking():
     while is_running:
         image = device.get_image()
         G, H, C = recon.get_surface_info(image, ppmm)
-        C = erode_contact_mask(C)
-        contact_area = np.sum(C)
-        if contact_area < 500:
-            cv2.imshow("frame", image)
+        frame = Frame(G, H, C)
+        if not frame.is_contacted:
+            resize_show(image)
             key = cv2.waitKey(1)
             if key != -1:
                 is_running = False
@@ -137,14 +142,13 @@ def realtime_object_tracking():
             # Tracking a new object, wait 2 frames for the contact to stabilize
             for _ in range(2):
                 image = device.get_image()
-                cv2.imshow("frame", image)
+                resize_show(image)
                 key = cv2.waitKey(1)
 
             # Get the surface information of the reference frame (key frame)
             image_start = device.get_image()
             G_start, H_start, C_start = recon.get_surface_info(image_start, ppmm)
-            C_start = erode_contact_mask(C_start)
-            N_start = gxy2normal(G_start)
+            frame_start = Frame(G_start, H_start, C_start)
             # For display purpose, get the largest contour and its center
             contours_start, _ = cv2.findContours(
                 (C_start * 255).astype(np.uint8),
@@ -157,73 +161,65 @@ def realtime_object_tracking():
             )
 
             # Start tracking this object relative to the reference frame (key frame)
-            G_ref = G_start.copy()
-            C_ref = C_start.copy()
-            H_ref = H_start.copy()
-            N_ref = N_start.copy()
-            G_prev = None
-            C_prev = None
-            H_prev = None
-            N_prev = None
-            prev_T_ref = np.eye(4)
-            start_T_ref = np.eye(4)
+            frame_ref = frame_start
+            frame_prev = frame_start
+            prev_T_ref = np.eye(4, dtype=np.float32)
+            start_T_ref = np.eye(4, dtype=np.float32)
             is_tracking = True
             while is_tracking:
                 # Get the surface information of the current frame
                 image_curr = device.get_image()
                 G_curr, H_curr, C_curr = recon.get_surface_info(image_curr, ppmm)
-                C_curr = erode_contact_mask(C_curr)
-                if np.sum(C_curr) < 500:
+                frame_curr = Frame(G_curr, H_curr, C_curr)
+                if not frame_curr.is_contacted:
                     is_tracking = False
                     break
-                N_curr = gxy2normal(G_curr)
 
                 # Use NormalFlow to estimate the transformation
                 try:
                     curr_T_ref = normalflow(
-                        N_ref,
-                        C_ref,
-                        H_ref,
-                        N_curr,
-                        C_curr,
-                        H_curr,
+                        frame_ref.N,
+                        frame_ref.C,
+                        frame_ref.H,
+                        frame_ref.L,
+                        frame_curr.N,
+                        frame_curr.C,
+                        frame_curr.H,
+                        frame_curr.L,
                         prev_T_ref,
                         ppmm,
                     )
-                    is_reset = False
-                except InsufficientOverlapError:
-                    is_reset = True
-                # Reset reference frame (set a new keyframe) if needed.
-                if N_prev is not None:
-                    curr_T_prev = normalflow(
-                        N_prev,
-                        C_prev,
-                        H_prev,
-                        N_curr,
-                        C_curr,
-                        H_curr,
-                        np.eye(4),
-                        ppmm,
-                    )
-                    if not is_reset:
-                        T_error = np.linalg.inv(curr_T_ref) @ curr_T_prev @ prev_T_ref
-                        pose_error = transform2pose(T_error)
-                        rot_error = np.linalg.norm(pose_error[3:])
-                        trans_error = np.linalg.norm(pose_error[:3])
-                        is_reset = rot_error > 3.0 or trans_error > 1.0
-                    if is_reset:
-                        G_ref = G_prev.copy()
-                        C_ref = C_prev.copy()
-                        H_ref = H_prev.copy()
-                        N_ref = N_prev.copy()
-                        start_T_ref = start_T_ref @ np.linalg.inv(prev_T_ref)
-                        curr_T_ref = curr_T_prev.copy()
-                # Update states
-                G_prev = G_curr.copy()
-                C_prev = C_curr.copy()
-                H_prev = H_curr.copy()
-                N_prev = N_curr.copy()
-                prev_T_ref = curr_T_ref.copy()
+                    frame_prev = frame_curr
+                    prev_T_ref = curr_T_ref
+                except LoseTrackError:
+                    # Reset reference frame as the previous frame
+                    frame_ref = frame_prev
+                    start_T_ref = start_T_ref @ np.linalg.inv(prev_T_ref)
+                    prev_T_ref = np.eye(4, dtype=np.float32)
+                    # Use NormalFlow to estimate the transformation to the new reference frame
+                    try:
+                        # We disable the threshold for consecutive frame tracking
+                        curr_T_ref = normalflow(
+                            frame_ref.N,
+                            frame_ref.C,
+                            frame_ref.H,
+                            frame_ref.L,
+                            frame_curr.N,
+                            frame_curr.C,
+                            frame_curr.H,
+                            frame_curr.L,
+                            prev_T_ref,
+                            ppmm,
+                            scr_threshold=0.0,
+                            ccs_threshold=0.0,
+                        )
+                        frame_prev = frame_curr
+                        prev_T_ref = curr_T_ref
+                    except LoseTrackError:
+                        # Lose track, set current frame as new start frame
+                        print("Lose Track!")
+                        is_tracking = False
+                        break
 
                 # Display the object tracking result
                 image_l = image_start.copy()
@@ -281,7 +277,7 @@ def realtime_object_tracking():
                 )
 
                 # Display
-                cv2.imshow("frame", cv2.hconcat([image_l, image_r]))
+                resize_show(cv2.hconcat([image_l, image_r]))
                 key = cv2.waitKey(1)
                 if key != -1:
                     is_tracking = False
